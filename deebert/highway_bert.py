@@ -58,6 +58,10 @@ class BertEncoder(nn.Module):
         self.highway = nn.ModuleList([BertHighway(config) for _ in range(config.num_hidden_layers)])
 
         self.early_exit_entropy = [-1 for _ in range(config.num_hidden_layers)]
+        self.use_pabee = getattr(config, "use_pabee", False)
+        self.patience = getattr(config, "patience", 3)
+        self.consistency_counter = 0
+        self.last_pred = None
 
     def set_early_exit_entropy(self, x):
         print(x)
@@ -98,19 +102,46 @@ class BertEncoder(nn.Module):
 
             if not self.training:
                 highway_logits = highway_exit[0]
+                probs = torch.softmax(highway_logits, dim=-1)
+                preds = torch.argmax(probs, dim=-1)  # shape [batch_size]
                 highway_entropy = entropy(highway_logits)
-                highway_exit = highway_exit + (highway_entropy,)  # logits, hidden_states(?), entropy
+                highway_exit = highway_exit + (highway_entropy,)
                 all_highway_exits = all_highway_exits + (highway_exit,)
 
-                if highway_entropy < self.early_exit_entropy[i]:
-                    # weight_func = lambda x: torch.exp(-3 * x) - 0.5**3
-                    # weight_func = lambda x: 2 - torch.exp(x)
-                    # weighted_logits = \
-                    #     sum([weight_func(x[2]) * x[0] for x in all_highway_exits]) /\
-                    #     sum([weight_func(x[2]) for x in all_highway_exits])
-                    # new_output = (weighted_logits,) + current_outputs[1:] + (all_highway_exits,)
-                    new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
-                    raise HighwayException(new_output, i+1)
+                if self.use_pabee:
+                    # Initialize patience tracking if needed
+                    if not hasattr(self, "_pabee_last_pred") or self._pabee_last_pred is None:
+                        self._pabee_last_pred = preds.clone()
+                        self._pabee_counter = torch.ones_like(preds)
+                    else:
+                        # Compare with previous prediction
+                        same = preds == self._pabee_last_pred
+                        self._pabee_counter = torch.where(
+                            same,
+                            self._pabee_counter + 1,
+                            torch.ones_like(self._pabee_counter)
+                        )
+                        self._pabee_last_pred = preds.clone()
+
+                    # Check if patience reached
+                    if torch.all(self._pabee_counter >= self.patience):
+                        # print(f"[PABEE EXIT] Exiting at layer {i + 1} with patience {self.patience}")
+                        new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
+                        # reset so next forward starts fresh
+                        self._pabee_last_pred = None
+                        self._pabee_counter = None
+                        raise HighwayException(new_output, i + 1)
+                else:
+                    # DeeBERT entropy-based exit
+                    if highway_entropy < self.early_exit_entropy[i]:
+                        #print(f"[DEE-BERT EXIT] Exiting at layer {i + 1} with entropy {highway_entropy.item():.3f}")
+                        new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
+                        raise HighwayException(new_output, i + 1)
+                # else:
+                #     # ---------- DeeBERT: entropy-based rule ----------
+                #     if highway_entropy < self.early_exit_entropy[i]:
+                #         new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
+                #         raise HighwayException(new_output, i + 1)
             else:
                 all_highway_exits = all_highway_exits + (highway_exit,)
 
