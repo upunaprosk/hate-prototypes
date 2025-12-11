@@ -6,7 +6,13 @@ This repository accompanies the paper:
 *Irina Proskurina, Marc-Antoine Carpentier, Julien Velcin*
 
 ---
-![HatePrototypes scheme](scheme-prototypes.jpg)
+<p align="center">
+  <img src="scheme-prototypes.jpg" 
+       alt="HatePrototypes scheme" 
+       width="500">
+</p>
+
+
 
 ---
 > Current approaches to hate speech detection, particularly for implicit or indirect expressions of hate, often depend on repeated pre-training or fine-tuning of large language models on newly collected datasets. Explicit hate is typically identifiable through surface cues, but implicit hate requires deeper contextual processing, which makes traditional supervised adaptation expensive and dataset-dependent.  
