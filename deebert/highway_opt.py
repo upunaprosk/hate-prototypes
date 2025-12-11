@@ -1,65 +1,113 @@
+# highway_opt.py
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
+from typing import Optional, Tuple, List
 
-# ---------- utilities ----------
-def entropy(logits: torch.Tensor):
-    p = torch.softmax(logits, dim=-1)
-    return -(p * (p.clamp_min(1e-8)).log()).sum(dim=-1)
+from transformers.models.opt.configuration_opt import OPTConfig
+from transformers.models.opt.modeling_opt import OPTPreTrainedModel, OPTDecoder
+
+
+# ---------------- utilities ----------------
+def entropy(logits: torch.Tensor) -> torch.Tensor:
+    p = torch.softmax(logits, dim=-1).clamp_min(1e-8)
+    return -(p * p.log()).sum(dim=-1)
+
+
+def _select_last_nonpad(hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor]) -> torch.Tensor:
+    """
+    Select last non-padding token per sample.
+    hidden_states: (B, T, H)
+    attention_mask: (B, T_total) where T_total may be past_len + T (we use only the last T).
+    Returns: (B, H)
+    """
+    B, T, H = hidden_states.shape
+    if attention_mask is None:
+        idx = torch.full((B,), T - 1, dtype=torch.long, device=hidden_states.device)
+    else:
+        am = attention_mask[:, -T:]  # drop past_kv columns if any
+        positions = torch.arange(T, device=hidden_states.device).unsqueeze(0)  # (1, T)
+        masked_pos = am * positions
+        idx = masked_pos.argmax(dim=1)  # last index where mask==1
+        empty = am.sum(dim=1) == 0
+        if empty.any():
+            idx = torch.where(empty, torch.full_like(idx, T - 1), idx)
+    return hidden_states[torch.arange(B, device=hidden_states.device), idx, :]
+
 
 class HighwayException(Exception):
     def __init__(self, message, exit_layer: int):
-        self.message = message  # e.g., (logits, ...)
+        self.message = message
         self.exit_layer = exit_layer  # 1-based index
 
 
-# ---------- highway heads for OPT (decoder-only) ----------
+# ---------------- per-layer highway head ----------------
 class OPTHighway(nn.Module):
-    """
-    Per-layer highway head for OPT. Pools the LAST token (decoder) then linear->tanh->dropout->classifier.
-    Uses hidden_size (decoder internal width), not word_embed_proj_dim.
-    """
-    def __init__(self, config):
+    def __init__(self, config: OPTConfig):
         super().__init__()
         hid = config.hidden_size
         self.pooler = nn.Linear(hid, hid)
         self.act = nn.Tanh()
-        self.dropout = nn.Dropout(getattr(config, "hidden_dropout_prob", getattr(config, "dropout", 0.1)))
+        p_drop = getattr(config, "hidden_dropout_prob", getattr(config, "dropout", 0.1))
+        self.dropout = nn.Dropout(p_drop)
         self.classifier = nn.Linear(hid, config.num_labels)
 
-    def forward(self, hidden_states: torch.Tensor):
-        # decoder: use last token representation
-        last_token = hidden_states[:, -1, :]         # (B, H)
-        pooled = self.act(self.pooler(last_token))   # (B, H)
+    def forward(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
+        token_states = _select_last_nonpad(hidden_states, attention_mask)  # (B, H)
+        pooled = self.act(self.pooler(token_states))
         pooled = self.dropout(pooled)
-        logits = self.classifier(pooled)             # (B, C)
+        logits = self.classifier(pooled)
         return logits, pooled
 
 
-class OPTEncoderHighway(nn.Module):
-    """
-    Wraps the OPT decoder stack and adds a highway head after each layer.
-    Matches BERT highway surface: has set_early_exit_entropy and raises HighwayException on exit.
-    """
-    def __init__(self, config, decoder):
+# ---------------- wrapper around decoder (no re-registration) ----------------
+class OPTDecoderHighway(nn.Module):
+    def __init__(self, config: OPTConfig, decoder: OPTDecoder):
         super().__init__()
         self.config = config
-        self.decoder = decoder
-        self.layers = decoder.layers  # nn.ModuleList[OPTDecoderLayer]
-        self.final_layer_norm = decoder.final_layer_norm
+
+        # ---- PABEE flags from config (default off) ----
+        self.use_pabee = getattr(config, "use_pabee", False)
+        self.patience = int(getattr(config, "patience", 3))
+
+        # Store decoder without re-registering
+        self.__dict__["_decoder"] = decoder
+        self._layers = tuple(decoder.layers)
 
         self.output_hidden_states = config.output_hidden_states
         self.output_attentions = config.output_attentions
 
         self.highway = nn.ModuleList([OPTHighway(config) for _ in range(config.num_hidden_layers)])
-        self.early_exit_entropy = [-1.0 for _ in range(config.num_hidden_layers)]  # disabled by default
+        self.early_exit_entropy: List[float] = [float(-1.0)] * config.num_hidden_layers
 
     def set_early_exit_entropy(self, x):
         if isinstance(x, (float, int)):
-            self.early_exit_entropy = [float(x) for _ in self.early_exit_entropy]
+            self.early_exit_entropy = [float(x)] * len(self.early_exit_entropy)
         else:
             assert len(x) == len(self.early_exit_entropy)
-            self.early_exit_entropy = list(map(float, x))
+            self.early_exit_entropy = [float(v) for v in x]
+
+    # --- helpers for version differences ---
+    def _build_causal_mask(self, attention_mask, input_shape, inputs_embeds, pkv_len):
+        dec: OPTDecoder = self.__dict__["_decoder"]
+        try:
+            return dec._prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds, pkv_len)
+        except AttributeError:
+            try:
+                from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+                return _prepare_4d_causal_attention_mask(attention_mask, input_shape, inputs_embeds, pkv_len)
+            except Exception:
+                from transformers.modeling_attn_mask_utils import _make_causal_mask, _expand_mask
+                cm = _make_causal_mask(input_shape, inputs_embeds.dtype, past_key_values_length=pkv_len).to(inputs_embeds.device)
+                if attention_mask is not None:
+                    cm = cm + _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+                return cm
+
+    def _pos_embeds(self, attention_mask, pkv_len):
+        dec: OPTDecoder = self.__dict__["_decoder"]
+        if hasattr(dec, "_embed_positions"):
+            return dec._embed_positions(attention_mask, pkv_len)
+        return dec.embed_positions(attention_mask, pkv_len)
 
     def forward(
         self,
@@ -72,15 +120,20 @@ class OPTEncoderHighway(nn.Module):
         output_attentions: bool = False,
         output_hidden_states: bool = False,
     ):
-        # Mirror OPTDecoder.forward prologue
+        dec: OPTDecoder = self.__dict__["_decoder"]
         output_attentions = output_attentions or self.output_attentions
         output_hidden_states = output_hidden_states or self.output_hidden_states
+
+        # Reset PABEE state each forward
+        if not self.training and self.use_pabee:
+            self._pabee_last_pred = None
+            self._pabee_counter = None
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("Specify either input_ids or inputs_embeds, not both.")
         if input_ids is not None:
             input_shape = input_ids.size()
-            inputs_embeds = self.decoder.embed_tokens(input_ids)
+            inputs_embeds = dec.embed_tokens(input_ids)
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
         else:
@@ -93,26 +146,20 @@ class OPTEncoderHighway(nn.Module):
         if attention_mask is None:
             attention_mask = torch.ones(bsz, mask_seq_len, device=inputs_embeds.device)
         elif attention_mask.shape[1] != mask_seq_len:
-            raise ValueError(
-                f"attention_mask length {attention_mask.shape[1]} != {mask_seq_len} (past+current)"
-            )
+            raise ValueError(f"attention_mask length {attention_mask.shape[1]} != {mask_seq_len} (past+current)")
 
-        causal_attn_mask = self.decoder._prepare_decoder_attention_mask(
-            attention_mask, input_shape, inputs_embeds, pkv_len
-        )
-        pos_embeds = self.decoder.embed_positions(attention_mask, pkv_len)
+        causal_attn_mask = self._build_causal_mask(attention_mask, input_shape, inputs_embeds, pkv_len)
+        pos_embeds = self._pos_embeds(attention_mask, pkv_len)
 
-        if self.decoder.project_in is not None:
-            inputs_embeds = self.decoder.project_in(inputs_embeds)
+        if dec.project_in is not None:
+            inputs_embeds = dec.project_in(inputs_embeds)
 
         hidden_states = inputs_embeds + pos_embeds
 
-        # caches & collectors
         all_hidden_states = () if output_hidden_states else None
-        all_highway_exits = ()
+        all_highway_exits: Tuple = ()
 
-        # Per-layer loop with highway & (optional) early exit
-        for i, layer in enumerate(self.layers):
+        for i, layer in enumerate(self._layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -126,27 +173,51 @@ class OPTEncoderHighway(nn.Module):
             )
             hidden_states = layer_outputs[0]
 
-            # Highway head on current layer output
-            h_logits, _ = self.highway[i](hidden_states)
+            # highway head
+            h_logits, _ = self.highway[i](hidden_states, attention_mask=attention_mask)
             if not self.training:
-                h_ent = entropy(h_logits).mean()  # batch-mean; simple/global stopping
+                h_ent = entropy(h_logits).mean()
                 all_highway_exits += ((h_logits, hidden_states, h_ent),)
 
-                if h_ent.item() < self.early_exit_entropy[i]:
-                    # Pack minimal payload (logits + collectors) like BERT code does
+                # ---------- PABEE ----------
+                if self.use_pabee:
+                    probs = torch.softmax(h_logits, dim=-1)
+                    preds = torch.argmax(probs, dim=-1)
+                    if (self._pabee_last_pred is None) or (self._pabee_counter is None):
+                        self._pabee_last_pred = preds.clone()
+                        self._pabee_counter = torch.ones_like(preds)
+                    else:
+                        same = preds == self._pabee_last_pred
+                        self._pabee_counter = torch.where(
+                            same, self._pabee_counter + 1, torch.ones_like(self._pabee_counter)
+                        )
+                        self._pabee_last_pred = preds.clone()
+                    if torch.all(self._pabee_counter >= self.patience):
+                        new_output = (h_logits,)
+                        if output_hidden_states:
+                            new_output += (all_hidden_states,)
+                        new_output += (None,)
+                        new_output += (all_highway_exits,)
+                        self._pabee_last_pred = None
+                        self._pabee_counter = None
+                        raise HighwayException(new_output, i + 1)
+
+                # ---------- DeeBERT ----------
+                elif h_ent.item() < self.early_exit_entropy[i]:
                     new_output = (h_logits,)
                     if output_hidden_states:
                         new_output += (all_hidden_states,)
-                    # raise to signal early exit at (i+1)
+                    new_output += (None,)
+                    new_output += (all_highway_exits,)
                     raise HighwayException(new_output, i + 1)
+
             else:
                 all_highway_exits += ((h_logits, hidden_states),)
 
-        # Final norm/projection like OPT
-        if self.final_layer_norm is not None:
-            hidden_states = self.final_layer_norm(hidden_states)
-        if self.decoder.project_out is not None:
-            hidden_states = self.decoder.project_out(hidden_states)
+        if dec.final_layer_norm is not None:
+            hidden_states = dec.final_layer_norm(hidden_states)
+        if dec.project_out is not None:
+            hidden_states = dec.project_out(hidden_states)
 
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
@@ -154,27 +225,26 @@ class OPTEncoderHighway(nn.Module):
         return hidden_states, all_hidden_states, all_highway_exits
 
 
+# ---------------- main model ----------------
 class OPTForSequenceClassificationHighway(OPTPreTrainedModel):
-    """
-    Decoder-only OPT with per-layer highway exits (names/APIs aligned with BERT highway code).
-    Returns (loss), logits, (hidden_states), (attentions=None), ((orig_entropy, highway_entropies), exit_layer).
-    """
     def __init__(self, config: OPTConfig):
         super().__init__(config)
+        self.config = config
         self.num_labels = config.num_labels
-        self.decoder = OPTDecoder(config)                 # reuse HF decoder
-        self.encoder = OPTEncoderHighway(config, self.decoder)
+        self.num_layers = config.num_hidden_layers
 
-        # final classifier for "no early-exit" path; use *word_embed_proj_dim* since decoder projects out
-        out_dim = config.word_embed_proj_dim
-        self.dropout = nn.Dropout(getattr(config, "hidden_dropout_prob", getattr(config, "dropout", 0.1)))
+        self.decoder = OPTDecoder(config)
+        self.highway = OPTDecoderHighway(config, self.decoder)
+
+        out_dim = getattr(config, "word_embed_proj_dim", config.hidden_size)
+        p_drop = getattr(config, "hidden_dropout_prob", getattr(config, "dropout", 0.1))
+        self.dropout = nn.Dropout(p_drop)
         self.classifier = nn.Linear(out_dim, config.num_labels)
 
         self.post_init()
 
-    # keep same API as BERT highway model
     def set_early_exit_entropy(self, x):
-        self.encoder.set_early_exit_entropy(x)
+        self.highway.set_early_exit_entropy(x)
 
     def forward(
         self,
@@ -186,15 +256,14 @@ class OPTForSequenceClassificationHighway(OPTPreTrainedModel):
         labels=None,
         output_layer: int = -1,
         train_highway: bool = False,
-        output_hidden_states: bool = None,
-        output_attentions: bool = None,
-        use_cache: bool = None,
+        output_hidden_states: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        use_cache: Optional[bool] = None,
         return_dict: bool = True,
     ):
-        exit_layer = self.config.num_hidden_layers
-        # Try early exit inside encoder
+        exit_layer = self.num_layers
         try:
-            hidden_states, all_hidden, all_highways = self.encoder(
+            hidden_states, all_hidden, all_highways = self.highway(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
@@ -204,59 +273,55 @@ class OPTForSequenceClassificationHighway(OPTPreTrainedModel):
                 output_attentions=output_attentions or False,
                 output_hidden_states=output_hidden_states or False,
             )
-            # final logits (no exit)
-            last_token = hidden_states[:, -1, :]
-            logits = self.classifier(self.dropout(last_token))
-            outputs = (logits, all_hidden, None, all_highways)  # align tuple positions
+            token_states = _select_last_nonpad(hidden_states, attention_mask)
+            logits = self.classifier(self.dropout(token_states))
+            outputs = (logits, all_hidden, None, all_highways)
         except HighwayException as e:
-            # Use highway logits from the exit layer
             outputs = e.message
             exit_layer = e.exit_layer
-            logits = outputs[0]  # highway logits
+            logits = outputs[0]
 
-        # Compute entropies for reporting
+        entropies = None
         if not self.training:
-            orig_entropy = entropy(logits).mean()
-            highway_ents = []
-            for hx in outputs[-1]:  # all_highways
-                if len(hx) == 3:
-                    highway_ents.append(hx[2].item())
-            entropies = (orig_entropy.item(), highway_ents)
-        else:
-            entropies = None
+            orig_entropy = entropy(logits).mean().item()
+            highway_ents: List[float] = []
+            if outputs[-1] is not None:
+                for hx in outputs[-1]:
+                    if len(hx) >= 3:
+                        highway_ents.append(float(hx[2].item()))
+            entropies = (orig_entropy, highway_ents)
 
-        # Loss (optionally train highway heads)
         loss = None
         if labels is not None:
             if self.num_labels == 1:
-                loss_fct = MSELoss()
-                loss = loss_fct(logits.view(-1), labels.view(-1))
+                loss = MSELoss()(logits.view(-1), labels.view(-1))
             else:
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                loss = CrossEntropyLoss()(logits.view(-1, self.num_labels), labels.view(-1))
 
-            if train_highway and outputs[-1] is not None:
+            if train_highway and (outputs[-1] is not None):
                 h_losses = []
-                for hx in outputs[-1]:  # (logits, hidden[, entropy])
+                for hx in outputs[-1][:-1]:
                     h_logits = hx[0]
                     if self.num_labels == 1:
-                        loss_fct = MSELoss()
-                        h_losses.append(loss_fct(h_logits.view(-1), labels.view(-1)))
+                        h_losses.append(MSELoss()(h_logits.view(-1), labels.view(-1)))
                     else:
-                        loss_fct = CrossEntropyLoss()
-                        h_losses.append(loss_fct(h_logits.view(-1, self.num_labels), labels.view(-1)))
-                if len(h_losses) > 1:
-                    loss = sum(h_losses[:-1])  # exclude last-layer highway
+                        h_losses.append(CrossEntropyLoss()(h_logits.view(-1, self.num_labels), labels.view(-1)))
+                if h_losses:
+                    loss = sum(h_losses)
 
-        # Match BERT-highway return structure
+        if (output_layer is not None) and (output_layer >= 0) and (outputs[-1] is not None):
+            highway_logits_all = [hx[0] for hx in outputs[-1]]
+            idx = max(0, min(output_layer, len(highway_logits_all) - 1))
+            logits = highway_logits_all[idx]
+
         if return_dict:
             return {
                 "loss": loss,
                 "logits": logits,
                 "hidden_states": outputs[1],
                 "attentions": None,
-                "entropies": entropies,     # (orig, [per-layer highway])
-                "exit_layer": exit_layer,   # 1..num_layers
+                "entropies": entropies,
+                "exit_layer": exit_layer,
             }
         else:
             return (loss, logits, outputs[1], None, entropies, exit_layer)
