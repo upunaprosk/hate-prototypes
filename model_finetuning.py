@@ -109,7 +109,7 @@ def main():
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--max_len", type=int, default=500)
-    ap.add_argument("--seeds", type=str, default="0,1,2,3,4")
+    ap.add_argument("--seeds", type=str, default="0,1,2,3,4,5,6,7,8,9")
     ap.add_argument("--push_to_hub", action="store_true")
     ap.add_argument("--out_json", type=str, default="all_metrics_results.json")
     args = ap.parse_args()
@@ -124,12 +124,12 @@ def main():
     all_metrics_results = {}
 
     for dataset in datasets:
-        all_metrics_results[dataset] = {}
-        train_path = f"{dataset}_train.csv"
-        tr_texts, tr_labels = load_split(train_path, args.text_col, args.label_col)
-        weights = sklearn_class_weights(np.array(tr_labels), device=device)
         for seed in seeds:
             set_seed(seed)
+            all_metrics_results[dataset] = {}
+            train_path = f"./{dataset}_train.csv"
+            tr_texts, tr_labels = load_split(train_path, args.text_col, args.label_col)
+            weights = sklearn_class_weights(np.array(tr_labels), device=device)
             lr_key = f"{args.lr:.0e}"
             all_metrics_results[dataset].setdefault(lr_key, {})
             all_metrics_results[dataset][lr_key].setdefault(f"seed_{seed}", {})
@@ -140,7 +140,7 @@ def main():
                 id2label={0: "not_hate", 1: "hate"},
                 label2id={"not_hate": 0, "hate": 1},
             ).to(device)
-            out_dir = Path(f"./tmp/{dataset}/seed{seed}_lr{lr_key}")
+            out_dir = Path(f"./tmp/{dataset}/full_seed{seed}_lr{lr_key}")
             args_tr = TrainingArguments(
                 output_dir=str(out_dir),
                 num_train_epochs=args.epochs,
@@ -184,9 +184,9 @@ def main():
                 tok_to_push   = AutoTokenizer.from_pretrained(str(save_dir))
                 model_to_push.push_to_hub(repo_id)
                 tok_to_push.push_to_hub(repo_id)
-
-    with open(args.out_json, "w") as f:
-        json.dump(all_metrics_results, f, indent=2)
+            out_path = f'{base_model_name}-{dataset}-s{seed}-metrics.json'
+            with open(out_path, "w") as f:
+                json.dump(all_metrics_results, f, indent=2)
 
 
 if __name__ == "__main__":
