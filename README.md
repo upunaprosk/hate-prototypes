@@ -1,6 +1,6 @@
 # HatePrototypes: Interpretable and Transferable Representations for Hate Speech Detection
 
-This repository accompanies the paper:
+This repository contains code for the paper:
 
 **[HatePrototypes: Interpretable and Transferable Representations for Implicit and Explicit Hate Speech Detection](https://arxiv.org/abs/2511.06391)**  
 *Irina Proskurina, Marc-Antoine Carpentier, Julien Velcin*
