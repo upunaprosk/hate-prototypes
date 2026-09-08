@@ -65,7 +65,6 @@ def get_wanted_result(result, key="f1_macro"):
     return result[key]
 
 
-# ============================ TRAINING FUNCTION (unchanged) ============================ #
 def train(args, train_dataset, model, tokenizer, train_highway=False):
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
@@ -139,7 +138,6 @@ def train(args, train_dataset, model, tokenizer, train_highway=False):
     return global_step, tr_loss / global_step
 
 
-# ============================ EVALUATION FUNCTION ============================ #
 def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=False):
     eval_task_names = (args.task_name,)
     eval_outputs_dirs = (args.output_dir,)
@@ -161,6 +159,7 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
         eval_loss, nb_eval_steps = 0.0, 0
         preds, out_label_ids = None, None
         exit_layer_counter = {(i+1):0 for i in range(model.num_layers)}
+        individual_results = []
         st = time.time()
 
         for batch in tqdm(eval_dataloader, desc="Evaluating"):
@@ -173,10 +172,26 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
                 if output_layer >= 0:
                     inputs['output_layer'] = output_layer
                 outputs = model(**inputs)
+
                 if eval_highway:
-                    exit_layer_counter[outputs[-1]] += 1
+                    exit_layer = int(outputs[-1])
+                    exit_layer_counter[exit_layer] += 1
+                else:
+                    exit_layer = model.num_layers
+
                 tmp_eval_loss, logits = outputs[:2]
                 eval_loss += tmp_eval_loss.mean().item()
+
+                batch_predictions = torch.argmax(logits, dim=1).detach().cpu().numpy()
+                batch_labels = inputs["labels"].detach().cpu().numpy()
+
+                for pred, label in zip(batch_predictions, batch_labels):
+                    individual_results.append({
+                        "example_id": len(individual_results),
+                        "true_label": int(label),
+                        "prediction": int(pred),
+                        "exit_layer": exit_layer
+                    })
 
             nb_eval_steps += 1
             if preds is None:
@@ -195,18 +210,15 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
         if eval_highway:
             print("Exit layer counter", exit_layer_counter)
 
-            # theoretical cost-based saving
             actual_cost = sum([l * c for l, c in exit_layer_counter.items()])
             full_cost = len(eval_dataloader) * model.num_layers
             avg_exit_layer = sum(l * c for l, c in exit_layer_counter.items()) / sum(exit_layer_counter.values())
             expected_saving = actual_cost / full_cost
 
-            # measure wall-clock
             eval_time = time.time() - st
             full_time_est = eval_time / expected_saving if expected_saving > 0 else eval_time
             speedup = full_time_est / eval_time
 
-            # print + store
             print(f"Average Exit Layer: {avg_exit_layer:.2f} | "
                   f"Expected saving: {expected_saving:.2f} | "
                   f"Eval time: {eval_time:.2f}s | Speedup ≈ {speedup:.2f}×")
@@ -220,7 +232,7 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
         else:
             eval_time = time.time() - st
             result["eval_time_sec"] = eval_time
-        ### PABEE ADDITION — save file naming
+
         if args.use_pabee:
             file_save_name = f"pabee_p{args.patience}_eval_results.txt"
         elif args.early_exit_entropy >= 0:
@@ -232,15 +244,29 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
         output_eval_file = os.path.join(eval_output_dir, prefix, file_save_name)
         if not os.path.exists(os.path.join(eval_output_dir, prefix)):
             os.makedirs(os.path.join(eval_output_dir, prefix))
+
         with open(output_eval_file, "w") as writer:
             logger.info(f"***** Eval results {prefix} *****")
             for key in sorted(result.keys()):
                 logger.info(f"  {key} = {result[key]}")
                 writer.write(f"{key} = {result[key]}\n")
+
+        import pandas as pd
+
+        if args.use_pabee:
+            prediction_file_name = f"pabee_p{args.patience}_predictions.csv"
+        elif args.early_exit_entropy >= 0:
+            ent = str(args.early_exit_entropy)[2:]
+            prediction_file_name = f"{ent}_predictions.csv"
+        else:
+            prediction_file_name = "predictions.csv"
+
+        prediction_file = os.path.join(eval_output_dir, prefix, prediction_file_name)
+        pd.DataFrame(individual_results).to_csv(prediction_file, index=False)
+
     return results
 
 
-# ============================ DATA LOADER ============================ #
 def load_and_cache_examples(args, task, tokenizer, evaluate=False):
     import pandas as pd
     split = "test" if evaluate else "train"
@@ -256,7 +282,6 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
     return TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels)
 
 
-# ============================ MAIN ============================ #
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", required=True, type=str)
@@ -270,30 +295,42 @@ def main():
     parser.add_argument("--do_train", action='store_true')
     parser.add_argument("--do_eval", action='store_true')
     parser.add_argument("--evaluate_during_training", action='store_true')
-
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int)
     parser.add_argument("--per_gpu_eval_batch_size", default=8, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=1, type=int)
+
     parser.add_argument("--learning_rate", default=5e-5, type=float)
+    parser.add_argument("--weight_decay", default=0.0, type=float)
+    parser.add_argument("--adam_epsilon", default=1e-8, type=float)
+    parser.add_argument("--warmup_steps", default=0, type=int)
+    parser.add_argument("--max_grad_norm", default=1.0, type=float)
+
     parser.add_argument("--num_train_epochs", default=3.0, type=float)
+
+    parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--fp16_opt_level", default="O1", type=str)
+
+    parser.add_argument("--save_steps", default=50, type=int)
+    parser.add_argument("--overwrite_output_dir", action="store_true")
+    parser.add_argument("--overwrite_cache", action="store_true")
+    parser.add_argument("--eval_after_first_stage", action="store_true")
+    parser.add_argument("--eval_highway", action="store_true")
     parser.add_argument("--early_exit_entropy", default=-1, type=float)
     parser.add_argument("--no_cuda", action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=-1)
 
-    ### PABEE ADDITIONS
     parser.add_argument("--use_pabee", action='store_true',
                         help="Use patience-based early exit (PABEE).")
     parser.add_argument("--patience", default=3, type=int,
                         help="Number of consistent predictions for early exit in PABEE.")
     args = parser.parse_args()
 
-    # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.device = device
     args.n_gpu = torch.cuda.device_count()
     set_seed(args)
 
-    # Load model + tokenizer
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.model_name_or_path, num_labels=2)
     config.use_pabee = args.use_pabee
