@@ -348,8 +348,14 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     if args.do_train:
+        print("Loading/tokenizing training data...")
         train_dataset = load_and_cache_examples(args, args.task_name, tokenizer)
+        print("Training data loaded:", len(train_dataset))
+
+        print("Starting main model training...")
         train(args, train_dataset, model, tokenizer)
+
+        print("Starting highway training...")
         train(args, train_dataset, model, tokenizer, train_highway=True)
 
     if args.do_eval:
