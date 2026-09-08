@@ -319,7 +319,8 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
 
                 for pred, label in zip(batch_predictions, batch_labels):
                     individual_results.append({
-                        "entropy": args.early_exit_entropy,
+                        "criterion": "patience" if args.use_pabee else "entropy",
+                        "value": args.patience if args.use_pabee else args.early_exit_entropy,
                         "example_id": len(individual_results),
                         "true_label": int(label),
                         "prediction": int(pred),
@@ -392,9 +393,11 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
 
         file_save_name = "eval_results.txt"
 
-        if args.early_exit_entropy >= 0:
-            ent = str(args.early_exit_entropy)[2:]
-            file_save_name = ent + "_eval_results.txt"
+        if args.use_pabee:
+            file_save_name = f"patience_{args.patience}_eval_results.txt"
+
+        elif args.early_exit_entropy >= 0:
+            file_save_name = f"entropy_{args.early_exit_entropy}_eval_results.txt"
 
         output_eval_file = os.path.join(
             eval_output_dir,
@@ -409,32 +412,32 @@ def evaluate(args, model, tokenizer, prefix="", output_layer=-1, eval_highway=Fa
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
 
-        # SAVE ALL INDIVIDUAL EXAMPLES INTO ONE FILE
-        if eval_highway and args.early_exit_entropy >= 0:
+        # SAVE INDIVIDUAL EXAMPLES
+        if eval_highway:
             import pandas as pd
 
-            individual_file = os.path.join(
-                eval_output_dir,
-                prefix,
-                "individual_savings.csv"
-            )
-
-            new_df = pd.DataFrame(individual_results)
-
-            # Keep ONE file; replace rows for this entropy if already present
-            if os.path.exists(individual_file):
-                old_df = pd.read_csv(individual_file)
-
-                old_df = old_df[
-                    old_df["entropy"] != args.early_exit_entropy
-                ]
-
-                new_df = pd.concat(
-                    [old_df, new_df],
-                    ignore_index=True
+            if args.use_pabee:
+                individual_file = os.path.join(
+                    eval_output_dir,
+                    prefix,
+                    f"patience_{args.patience}_individual.parquet"
                 )
 
-            new_df.to_csv(individual_file, index=False)
+            elif args.early_exit_entropy >= 0:
+                individual_file = os.path.join(
+                    eval_output_dir,
+                    prefix,
+                    f"entropy_{args.early_exit_entropy}_individual.parquet"
+                )
+
+            else:
+                individual_file = None
+
+            if individual_file is not None:
+                pd.DataFrame(individual_results).to_parquet(
+                    individual_file,
+                    index=False
+                )
 
     return results
 
@@ -523,7 +526,11 @@ def main():
                         help="Linear warmup over warmup_steps.")
     parser.add_argument("--early_exit_entropy", default=-1, type=float,
                         help = "Entropy threshold for early exit.")
+    parser.add_argument("--use_pabee", action="store_true",
+                        help="Use patience-based early exiting.")
 
+    parser.add_argument("--patience", default=3, type=int,
+                        help="Patience value for PABEE-style early exiting.")
 
     parser.add_argument('--logging_steps', type=int, default=50,
                         help="Log every X updates steps.")
@@ -599,6 +606,8 @@ def main():
                                           num_labels=num_labels,
                                           finetuning_task=args.task_name,
                                           cache_dir=args.cache_dir if args.cache_dir else None)
+    config.use_pabee = args.use_pabee
+    config.patience = args.patience
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case,
                                                 cache_dir=args.cache_dir if args.cache_dir else None)
@@ -608,8 +617,16 @@ def main():
                                         cache_dir=args.cache_dir if args.cache_dir else None)
 
     if args.model_type == "bert":
-        model.bert.encoder.set_early_exit_entropy(args.early_exit_entropy)
+        if args.use_pabee:
+            model.bert.encoder.use_pabee = True
+            model.bert.encoder.patience = args.patience
+            model.bert.encoder.set_early_exit_entropy(-1)
+        else:
+            model.bert.encoder.use_pabee = False
+            model.bert.encoder.set_early_exit_entropy(args.early_exit_entropy)
+
         model.bert.init_highway_pooler()
+
     else:
         model.roberta.encoder.set_early_exit_entropy(args.early_exit_entropy)
         model.roberta.init_highway_pooler()
@@ -669,12 +686,30 @@ def main():
             global_step = checkpoint.split('-')[-1] if len(checkpoints) > 1 else ""
             prefix = checkpoint.split('/')[-1] if checkpoint.find('checkpoint') != -1 else ""
 
-            model = model_class.from_pretrained(checkpoint)
-            if args.model_type=="bert":
-                model.bert.encoder.set_early_exit_entropy(args.early_exit_entropy)
+            checkpoint_config = config_class.from_pretrained(checkpoint)
+
+            checkpoint_config.use_pabee = args.use_pabee
+            checkpoint_config.patience = args.patience
+
+            model = model_class.from_pretrained(
+                checkpoint,
+                config=checkpoint_config
+            )
+
+            if args.model_type == "bert":
+                if args.use_pabee:
+                    model.bert.encoder.use_pabee = True
+                    model.bert.encoder.patience = args.patience
+                    model.bert.encoder.set_early_exit_entropy(-1)
+                else:
+                    model.bert.encoder.use_pabee = False
+                    model.bert.encoder.set_early_exit_entropy(args.early_exit_entropy)
+
             else:
                 model.roberta.encoder.set_early_exit_entropy(args.early_exit_entropy)
+
             model.to(args.device)
+
             result = evaluate(args, model, tokenizer, prefix=prefix,
                               eval_highway=args.eval_highway)
             print_result = get_wanted_result(result)

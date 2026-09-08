@@ -52,20 +52,33 @@ class BertEmbeddings(nn.Module):
 class BertEncoder(nn.Module):
     def __init__(self, config):
         super(BertEncoder, self).__init__()
+
         self.output_attentions = config.output_attentions
         self.output_hidden_states = config.output_hidden_states
-        self.layer = nn.ModuleList([BertLayer(config) for _ in range(config.num_hidden_layers)])
-        self.highway = nn.ModuleList([BertHighway(config) for _ in range(config.num_hidden_layers)])
 
-        self.early_exit_entropy = [-1 for _ in range(config.num_hidden_layers)]
+        self.layer = nn.ModuleList([
+            BertLayer(config)
+            for _ in range(config.num_hidden_layers)
+        ])
+
+        self.highway = nn.ModuleList([
+            BertHighway(config)
+            for _ in range(config.num_hidden_layers)
+        ])
+
+        # DeeBERT entropy
+        self.early_exit_entropy = [
+            -1 for _ in range(config.num_hidden_layers)
+        ]
+
+        # PABEE
         self.use_pabee = getattr(config, "use_pabee", False)
         self.patience = getattr(config, "patience", 3)
-        self.consistency_counter = 0
-        self.last_pred = None
 
     def set_early_exit_entropy(self, x):
         print(x)
-        if (type(x) is float) or (type(x) is int):
+
+        if isinstance(x, (float, int)):
             for i in range(len(self.early_exit_entropy)):
                 self.early_exit_entropy[i] = x
         else:
@@ -73,91 +86,147 @@ class BertEncoder(nn.Module):
 
     def init_highway_pooler(self, pooler):
         loaded_model = pooler.state_dict()
+
         for highway in self.highway:
             for name, param in highway.pooler.state_dict().items():
                 param.copy_(loaded_model[name])
 
-    def forward(self, hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None):
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        head_mask=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None
+    ):
+
         all_hidden_states = ()
         all_attentions = ()
         all_highway_exits = ()
+
+        # PABEE state is LOCAL to this forward pass
+        pabee_counter = 0
+        pabee_last_logits = None
+
         for i, layer_module in enumerate(self.layer):
+
             if self.output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            layer_outputs = layer_module(hidden_states, attention_mask, head_mask[i], encoder_hidden_states, encoder_attention_mask)
+            layer_outputs = layer_module(
+                hidden_states,
+                attention_mask,
+                head_mask[i],
+                encoder_hidden_states,
+                encoder_attention_mask
+            )
+
             hidden_states = layer_outputs[0]
 
             if self.output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
 
             current_outputs = (hidden_states,)
+
             if self.output_hidden_states:
                 current_outputs = current_outputs + (all_hidden_states,)
+
             if self.output_attentions:
                 current_outputs = current_outputs + (all_attentions,)
 
+            # Highway classifier for this layer
             highway_exit = self.highway[i](current_outputs)
-            # logits, pooled_output
+            # highway_exit = (logits, pooled_output)
 
             if not self.training:
+
                 highway_logits = highway_exit[0]
-                probs = torch.softmax(highway_logits, dim=-1)
-                preds = torch.argmax(probs, dim=-1)  # shape [batch_size]
+
                 highway_entropy = entropy(highway_logits)
+
                 highway_exit = highway_exit + (highway_entropy,)
                 all_highway_exits = all_highway_exits + (highway_exit,)
 
+                # PABEE: prediction-consistency early exit
                 if self.use_pabee:
-                    # Initialize patience tracking if needed
-                    if not hasattr(self, "_pabee_last_pred") or self._pabee_last_pred is None:
-                        self._pabee_last_pred = preds.clone()
-                        self._pabee_counter = torch.ones_like(preds)
-                    else:
-                        # Compare with previous prediction
-                        same = preds == self._pabee_last_pred
-                        self._pabee_counter = torch.where(
-                            same,
-                            self._pabee_counter + 1,
-                            torch.ones_like(self._pabee_counter)
+
+                    current_pred = (
+                        highway_logits
+                        .detach()
+                        .argmax(dim=1)
+                    )
+
+                    if pabee_last_logits is not None:
+
+                        previous_pred = (
+                            pabee_last_logits
+                            .detach()
+                            .argmax(dim=1)
                         )
-                        self._pabee_last_pred = preds.clone()
 
-                    # Check if patience reached
-                    if torch.all(self._pabee_counter >= self.patience):
-                        # print(f"[PABEE EXIT] Exiting at layer {i + 1} with patience {self.patience}")
-                        new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
-                        # reset so next forward starts fresh
-                        self._pabee_last_pred = None
-                        self._pabee_counter = None
-                        raise HighwayException(new_output, i + 1)
+                        if torch.all(current_pred.eq(previous_pred)):
+                            pabee_counter += 1
+                        else:
+                            pabee_counter = 0
+
+                    # Store current prediction/logits for next layer
+                    pabee_last_logits = highway_logits
+
+                    # patience counts consecutive AGREEMENTS
+                    if pabee_counter == self.patience:
+
+                        new_output = (
+                            (highway_logits,)
+                            + current_outputs[1:]
+                            + (all_highway_exits,)
+                        )
+
+                        raise HighwayException(
+                            new_output,
+                            i + 1
+                        )
+
+                # DeeBERT: entropy early exit
                 else:
-                    # DeeBERT entropy-based exit
-                    if highway_entropy < self.early_exit_entropy[i]:
-                        #print(f"[DEE-BERT EXIT] Exiting at layer {i + 1} with entropy {highway_entropy.item():.3f}")
-                        new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
-                        raise HighwayException(new_output, i + 1)
-                # else:
-                #     # ---------- DeeBERT: entropy-based rule ----------
-                #     if highway_entropy < self.early_exit_entropy[i]:
-                #         new_output = (highway_logits,) + current_outputs[1:] + (all_highway_exits,)
-                #         raise HighwayException(new_output, i + 1)
-            else:
-                all_highway_exits = all_highway_exits + (highway_exit,)
 
-        # Add last layer
+                    if highway_entropy < self.early_exit_entropy[i]:
+
+                        new_output = (
+                            (highway_logits,)
+                            + current_outputs[1:]
+                            + (all_highway_exits,)
+                        )
+
+                        raise HighwayException(
+                            new_output,
+                            i + 1
+                        )
+
+            else:
+                # During training collect all highway outputs
+                all_highway_exits = (
+                    all_highway_exits
+                    + (highway_exit,)
+                )
+
+        # Add final hidden state
         if self.output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states,)
+            all_hidden_states = (
+                all_hidden_states
+                + (hidden_states,)
+            )
 
         outputs = (hidden_states,)
+
         if self.output_hidden_states:
             outputs = outputs + (all_hidden_states,)
+
         if self.output_attentions:
             outputs = outputs + (all_attentions,)
 
         outputs = outputs + (all_highway_exits,)
-        return outputs  # last-layer hidden state, (all hidden states), (all attentions), all highway exits
 
+        return outputs
 
 class BertPooler(nn.Module):
     def __init__(self, config):
@@ -399,6 +468,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         loss, logits = outputs[:2]
 
     """
+    all_tied_weights_keys = {}
     def __init__(self, config):
         super(BertForSequenceClassification, self).__init__(config)
         self.num_labels = config.num_labels
