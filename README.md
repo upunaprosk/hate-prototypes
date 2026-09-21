@@ -6,7 +6,7 @@
   <a href="https://arxiv.org/abs/2511.06391" target="_blank">
       <img alt="Paper" src="https://img.shields.io/badge/📜-Paper-purple" />
    </a>
-     <a href="poster_470.pdf" target="_blank">
+     <a href="figures/poster_470.pdf" target="_blank">
     <img alt="Poster" src="https://img.shields.io/badge/🖼️_Poster-PDF-blue" />
   </a>
   <a href="https://lrec2026.info" target="_blank">
@@ -26,7 +26,7 @@ This repository contains data and evaluation code for the paper **[HatePrototype
 ## 🌟 Overview
 
 <p align="center">
-  <img src="scheme-prototypes.jpg" 
+  <img src="figures/scheme-prototypes.jpg" 
        alt="HatePrototypes scheme" 
        width="500">
 </p>
@@ -51,7 +51,7 @@ For each evaluation domain `X`, we compare performance using prototypes from ano
 Here, `X` is the encoder/evaluation domain and `Y` is the prototype source domain.
 
 <p align="center">
-  <img src="bert_opt_prototype_transfer.png"
+  <img src="figures/bert_opt_prototype_transfer.png"
        alt="HatePrototypes transfer results"
        width="500">
 </p>
@@ -72,7 +72,7 @@ We test:
 These models are designed for general content safety moderation, not specifically for hate-speech detection. We evaluate whether prototype-based classification improves their performance on implicit and explicit hate-speech datasets.
 
 <p align="center">
-  <img src="guard-models-results.png"
+  <img src="figures/guard-models-results.png"
        alt="Guard model prototype classification results"
        width="500">
 </p>
