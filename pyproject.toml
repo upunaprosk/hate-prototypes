@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "hateprototypes"
+version = "0.1.0"
+description = "Interpretable and transferable prototype representations for implicit and explicit hate speech detection"
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [
+    { name = "Irina Proskurina" },
+    { name = "Marc-Antoine Carpentier" },
+    { name = "Julien Velcin" },
+]
+
+keywords = [
+    "hate-speech-detection",
+    "nlp",
+    "prototypes",
+    "transfer-learning",
+    "early-exit",
+    "content-moderation",
+]
+
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "torch>=2.4",
+    "transformers>=4.45",
+    "datasets>=3.0",
+    "accelerate>=0.34",
+    "huggingface-hub>=0.24",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+
+[project.urls]
+Homepage = "https://github.com/upunaprosk/hate-prototypes"
+Repository = "https://github.com/upunaprosk/hate-prototypes"
+Paper = "https://doi.org/10.63317/3opu4zq9p6pc"
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "B",
+]
