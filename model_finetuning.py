@@ -48,10 +48,7 @@ class BinaryHateDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, index):
-        item = {
-            key: value[index]
-            for key, value in self.encodings.items()
-        }
+        item = {key: value[index] for key, value in self.encodings.items()}
         item["labels"] = self.labels[index]
         return item
 
@@ -73,9 +70,7 @@ class WeightedTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.logits
 
-        loss_fn = torch.nn.CrossEntropyLoss(
-            weight=self.class_weights.to(logits.device)
-        )
+        loss_fn = torch.nn.CrossEntropyLoss(weight=self.class_weights.to(logits.device))
 
         loss = loss_fn(logits, labels)
 
@@ -88,9 +83,7 @@ class WeightedTrainer(Trainer):
 def load_split(path, text_col, label_col):
     df = pd.read_csv(path)
 
-    df = df.dropna(
-        subset=[text_col, label_col]
-    ).copy()
+    df = df.dropna(subset=[text_col, label_col]).copy()
 
     df["label"] = normalize_labels(df[label_col])
 
@@ -149,11 +142,7 @@ def class_weights(labels):
 
 
 def comma_list(value):
-    return [
-        item.strip()
-        for item in value.split(",")
-        if item.strip()
-    ]
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def comma_ints(value):
@@ -164,9 +153,7 @@ def build_parser(
     default_model="bert-base-cased",
     default_seeds="0,1,2,3,4,5,6,7,8,9",
 ):
-    parser = argparse.ArgumentParser(
-        description="Fine-tune binary hate-speech classifiers."
-    )
+    parser = argparse.ArgumentParser(description="Fine-tune binary hate-speech classifiers.")
 
     parser.add_argument(
         "--model_name",
@@ -233,9 +220,7 @@ def main(
     args = parser.parse_args()
 
     if args.push_to_hub and not args.hf_username:
-        parser.error(
-            "--hf_username is required with --push_to_hub"
-        )
+        parser.error("--hf_username is required with --push_to_hub")
 
     if args.hf_token:
         login(token=args.hf_token)
@@ -254,9 +239,7 @@ def main(
 
         tokenizer.padding_side = "left"
 
-    collator = DataCollatorWithPadding(
-        tokenizer=tokenizer
-    )
+    collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     results = {}
 
@@ -279,9 +262,7 @@ def main(
         results.setdefault(dataset, {})
         results[dataset].setdefault(lr_key, {})
 
-        train_path = args.train_pattern.format(
-            ds=dataset
-        )
+        train_path = args.train_pattern.format(ds=dataset)
 
         train_texts, train_labels = load_split(
             train_path,
@@ -294,9 +275,7 @@ def main(
         for seed in seeds:
             set_seed(seed)
 
-            print(
-                f"\n=== Training {dataset}, seed={seed} ==="
-            )
+            print(f"\n=== Training {dataset}, seed={seed} ===")
 
             train_dataset = BinaryHateDataset(
                 train_texts,
@@ -305,37 +284,26 @@ def main(
                 args.max_len,
             )
 
-            model = (
-                AutoModelForSequenceClassification
-                .from_pretrained(
-                    args.model_name,
-                    num_labels=2,
-                    id2label={
-                        0: "not_hate",
-                        1: "hate",
-                    },
-                    label2id={
-                        "not_hate": 0,
-                        "hate": 1,
-                    },
-                )
+            model = AutoModelForSequenceClassification.from_pretrained(
+                args.model_name,
+                num_labels=2,
+                id2label={
+                    0: "not_hate",
+                    1: "hate",
+                },
+                label2id={
+                    "not_hate": 0,
+                    "hate": 1,
+                },
             )
 
-            run_dir = (
-                tmp_dir
-                / dataset
-                / f"seed{seed}_lr{lr_key}"
-            )
+            run_dir = tmp_dir / dataset / f"seed{seed}_lr{lr_key}"
 
             training_args = TrainingArguments(
                 output_dir=str(run_dir),
                 num_train_epochs=args.epochs,
-                per_device_train_batch_size=(
-                    args.batch_size
-                ),
-                per_device_eval_batch_size=(
-                    args.batch_size
-                ),
+                per_device_train_batch_size=(args.batch_size),
+                per_device_eval_batch_size=(args.batch_size),
                 learning_rate=args.lr,
                 seed=seed,
                 logging_strategy="no",
@@ -355,13 +323,7 @@ def main(
 
             trainer.train()
 
-            save_dir = (
-                models_dir
-                / (
-                    f"{base_model_name}-"
-                    f"{dataset}-s{seed}"
-                )
-            )
+            save_dir = models_dir / (f"{base_model_name}-{dataset}-s{seed}")
 
             trainer.save_model(str(save_dir))
             tokenizer.save_pretrained(str(save_dir))
@@ -369,9 +331,7 @@ def main(
             seed_results = {}
 
             for evaluation_dataset in datasets:
-                test_path = args.test_pattern.format(
-                    ds=evaluation_dataset
-                )
+                test_path = args.test_pattern.format(ds=evaluation_dataset)
 
                 texts, labels = load_split(
                     test_path,
@@ -386,28 +346,16 @@ def main(
                     args.max_len,
                 )
 
-                metrics = trainer.evaluate(
-                    eval_dataset=test_dataset
-                )
+                metrics = trainer.evaluate(eval_dataset=test_dataset)
 
                 seed_results[evaluation_dataset] = {
-                    "accuracy": float(
-                        metrics["eval_accuracy"]
-                    ),
-                    "f1_binary": float(
-                        metrics["eval_f1_binary"]
-                    ),
-                    "f1_macro": float(
-                        metrics["eval_f1_macro"]
-                    ),
-                    "pr_auc": float(
-                        metrics["eval_pr_auc"]
-                    ),
+                    "accuracy": float(metrics["eval_accuracy"]),
+                    "f1_binary": float(metrics["eval_f1_binary"]),
+                    "f1_macro": float(metrics["eval_f1_macro"]),
+                    "pr_auc": float(metrics["eval_pr_auc"]),
                 }
 
-            results[dataset][lr_key][
-                f"seed_{seed}"
-            ] = seed_results
+            results[dataset][lr_key][f"seed_{seed}"] = seed_results
 
             # Save incrementally, but preserve every seed.
             with open(
@@ -422,11 +370,7 @@ def main(
                 )
 
             if args.push_to_hub:
-                repo_id = (
-                    f"{args.hf_username}/"
-                    f"{base_model_name}-"
-                    f"{dataset}-s{seed}"
-                )
+                repo_id = f"{args.hf_username}/{base_model_name}-{dataset}-s{seed}"
 
                 api = HfApi()
                 api.create_repo(

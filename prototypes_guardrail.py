@@ -31,11 +31,7 @@ def collect_last_token_embeddings(model, loader, device):
     for batch in loader:
         labels.extend(batch["labels"].tolist())
 
-        inputs = {
-            key: value.to(device)
-            for key, value in batch.items()
-            if key != "labels"
-        }
+        inputs = {key: value.to(device) for key, value in batch.items() if key != "labels"}
 
         outputs = model(
             **inputs,
@@ -46,11 +42,7 @@ def collect_last_token_embeddings(model, loader, device):
         hidden = outputs.hidden_states[-1]
         attention_mask = inputs["attention_mask"]
 
-        last_indices = (
-            attention_mask.size(1)
-            - 1
-            - torch.argmax(attention_mask.flip(1), dim=1)
-        )
+        last_indices = attention_mask.size(1) - 1 - torch.argmax(attention_mask.flip(1), dim=1)
 
         batch_indices = torch.arange(
             hidden.size(0),
@@ -62,9 +54,7 @@ def collect_last_token_embeddings(model, loader, device):
             last_indices,
         ]
 
-        features.append(
-            embeddings.detach().float().cpu().numpy()
-        )
+        features.append(embeddings.detach().float().cpu().numpy())
 
     if not features:
         return np.empty((0, model.config.hidden_size)), labels
@@ -73,9 +63,7 @@ def collect_last_token_embeddings(model, loader, device):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate HatePrototypes with a safety model."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate HatePrototypes with a safety model.")
 
     parser.add_argument(
         "--datasets",
@@ -133,13 +121,9 @@ def main():
         for dataset in args.datasets
     }
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -208,11 +192,7 @@ def main():
             )
 
             if args.save_protos:
-                proto_dir = (
-                    output_dir
-                    / "prototypes"
-                    / f"seed{seed}"
-                )
+                proto_dir = output_dir / "prototypes" / f"seed{seed}"
                 proto_dir.mkdir(
                     parents=True,
                     exist_ok=True,
@@ -220,14 +200,8 @@ def main():
 
                 for class_id in (0, 1):
                     np.save(
-                        proto_dir
-                        / (
-                            f"{prototype_domain}"
-                            f"_class{class_id}.npy"
-                        ),
-                        prototypes[
-                            prototype_domain
-                        ][class_id],
+                        proto_dir / (f"{prototype_domain}_class{class_id}.npy"),
+                        prototypes[prototype_domain][class_id],
                     )
 
         for prototype_domain in args.datasets:
@@ -253,20 +227,10 @@ def main():
                 )
 
                 print(
-                    f"{seed=} "
-                    f"proto={prototype_domain} "
-                    f"eval={target} "
-                    f"F1={f1:.4f} ACC={accuracy:.4f}"
+                    f"{seed=} proto={prototype_domain} eval={target} F1={f1:.4f} ACC={accuracy:.4f}"
                 )
 
-                output = (
-                    output_dir
-                    / (
-                        f"preds_s{seed}"
-                        f"_proto{prototype_domain}"
-                        f"_to_{target}.csv.gz"
-                    )
-                )
+                output = output_dir / (f"preds_s{seed}_proto{prototype_domain}_to_{target}.csv.gz")
 
                 pd.DataFrame(
                     {

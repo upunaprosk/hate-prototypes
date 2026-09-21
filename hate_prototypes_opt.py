@@ -32,11 +32,7 @@ def collect_cls_embeddings(model, loader, device):
     for batch in loader:
         labels.extend(batch["labels"].tolist())
 
-        inputs = {
-            key: value.to(device)
-            for key, value in batch.items()
-            if key != "labels"
-        }
+        inputs = {key: value.to(device) for key, value in batch.items() if key != "labels"}
 
         outputs = model(
             **inputs,
@@ -45,9 +41,7 @@ def collect_cls_embeddings(model, loader, device):
         )
 
         cls_embeddings = outputs.hidden_states[-1][:, 0, :]
-        features.append(
-            cls_embeddings.detach().float().cpu().numpy()
-        )
+        features.append(cls_embeddings.detach().float().cpu().numpy())
 
     if not features:
         return np.empty((0, model.config.hidden_size)), labels
@@ -56,9 +50,7 @@ def collect_cls_embeddings(model, loader, device):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate BERT HatePrototypes."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate BERT HatePrototypes.")
 
     parser.add_argument(
         "--datasets",
@@ -113,9 +105,7 @@ def main():
         for dataset in args.datasets
     }
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for source in args.datasets:
         print(f"\n=== BERT encoder: {source.upper()} ===")
@@ -191,21 +181,12 @@ def main():
                 )
 
                 if args.save_protos:
-                    proto_dir = (
-                        out_dir
-                        / "prototypes"
-                        / source
-                        / f"seed{seed}"
-                    )
+                    proto_dir = out_dir / "prototypes" / source / f"seed{seed}"
                     proto_dir.mkdir(parents=True, exist_ok=True)
 
                     for class_id in (0, 1):
                         np.save(
-                            proto_dir
-                            / (
-                                f"{prototype_domain}"
-                                f"_class{class_id}.npy"
-                            ),
+                            proto_dir / (f"{prototype_domain}_class{class_id}.npy"),
                             prototypes[prototype_domain][class_id],
                         )
 
@@ -236,13 +217,8 @@ def main():
                         f"F1={f1:.4f} ACC={accuracy:.4f}"
                     )
 
-                    output = (
-                        out_dir
-                        / (
-                            f"preds_{source}_s{seed}"
-                            f"_proto{prototype_domain}"
-                            f"_to_{target}.csv.gz"
-                        )
+                    output = out_dir / (
+                        f"preds_{source}_s{seed}_proto{prototype_domain}_to_{target}.csv.gz"
                     )
 
                     pd.DataFrame(
