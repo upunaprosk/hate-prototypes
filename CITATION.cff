@@ -1,0 +1,70 @@
+cff-version: 1.2.0
+
+message: >-
+  If you use HatePrototypes in your research, please cite the
+  associated LREC 2026 paper.
+
+title: "HatePrototypes"
+
+type: software
+
+authors:
+  - family-names: "Proskurina"
+    given-names: "Irina"
+
+  - family-names: "Carpentier"
+    given-names: "Marc-Antoine"
+
+  - family-names: "Velcin"
+    given-names: "Julien"
+
+repository-code: "https://github.com/upunaprosk/hate-prototypes"
+
+url: "https://github.com/upunaprosk/hate-prototypes"
+
+abstract: >-
+  Code and resources for HatePrototypes: Interpretable and Transferable
+  Representations for Implicit and Explicit Hate Speech Detection.
+  The repository contains implementations for prototype-based hate speech
+  classification, cross-dataset transfer, guard-model evaluation, and
+  early-exit experiments.
+
+keywords:
+  - "hate speech detection"
+  - "natural language processing"
+  - "prototypes"
+  - "transfer learning"
+  - "early exiting"
+  - "content moderation"
+
+preferred-citation:
+  type: conference-paper
+
+  title: >-
+    HatePrototypes: Interpretable and Transferable Representations
+    for Implicit and Explicit Hate Speech Detection
+
+  authors:
+    - family-names: "Proskurina"
+      given-names: "Irina"
+
+    - family-names: "Carpentier"
+      given-names: "Marc-Antoine"
+
+    - family-names: "Velcin"
+      given-names: "Julien"
+
+  collection-title: >-
+    Proceedings of the Fifteenth Language Resources and Evaluation
+    Conference (LREC 2026)
+
+  year: 2026
+  month: 5
+
+  start: 4387
+  end: 4399
+
+  publisher:
+    name: "European Language Resources Association (ELRA)"
+
+  doi: "10.63317/3opu4zq9p6pc"
