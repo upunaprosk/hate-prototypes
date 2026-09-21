@@ -126,9 +126,7 @@ def test_build_class_means_missing_class():
 
 
 def test_build_class_means_rejects_wrong_shape():
-    features = np.array(
-        [1.0, 2.0, 3.0]
-    )
+    features = np.array([1.0, 2.0, 3.0])
 
     labels = [0, 1, 0]
 
@@ -163,13 +161,9 @@ def test_build_class_means_rejects_length_mismatch():
 
 
 def test_cosine_classify():
-    prototype_0 = np.array(
-        [1.0, 0.0]
-    )
+    prototype_0 = np.array([1.0, 0.0])
 
-    prototype_1 = np.array(
-        [0.0, 1.0]
-    )
+    prototype_1 = np.array([0.0, 1.0])
 
     features = np.array(
         [
@@ -224,9 +218,7 @@ def test_cosine_classification_is_scale_invariant():
 
 
 def test_cosine_classify_rejects_wrong_shape():
-    features = np.array(
-        [1.0, 0.0]
-    )
+    features = np.array([1.0, 0.0])
 
     with pytest.raises(
         ValueError,

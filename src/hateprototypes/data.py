@@ -6,7 +6,6 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-
 LABEL_MAPPING = {
     "hate": 1,
     "unsafe": 1,
@@ -32,9 +31,7 @@ def normalize_label(value) -> int:
         try:
             value = int(normalized)
         except ValueError as exc:
-            raise ValueError(
-                f"Unrecognized label: {value!r}"
-            ) from exc
+            raise ValueError(f"Unrecognized label: {value!r}") from exc
 
     if isinstance(value, (int, np.integer)):
         value = int(value)
@@ -42,10 +39,7 @@ def normalize_label(value) -> int:
         if value in (0, 1):
             return value
 
-    raise ValueError(
-        f"Expected a binary label (0/1 or supported string), "
-        f"got {value!r}."
-    )
+    raise ValueError(f"Expected a binary label (0/1 or supported string), got {value!r}.")
 
 
 def normalize_labels(series: pd.Series) -> pd.Series:
@@ -54,7 +48,7 @@ def normalize_labels(series: pd.Series) -> pd.Series:
 
 
 class TextDataset(Dataset):
-    """ tokenized text classification dataset"""
+    """tokenized text classification dataset"""
 
     def __init__(
         self,
@@ -69,9 +63,7 @@ class TextDataset(Dataset):
         self.max_length = max_length
 
         if len(self.texts) != len(self.labels):
-            raise ValueError(
-                "texts and labels must have the same length."
-            )
+            raise ValueError("texts and labels must have the same length.")
 
     def __len__(self) -> int:
         return len(self.texts)
@@ -86,10 +78,7 @@ class TextDataset(Dataset):
             return_tensors="pt",
         )
 
-        item = {
-            key: value.squeeze(0)
-            for key, value in encoded.items()
-        }
+        item = {key: value.squeeze(0) for key, value in encoded.items()}
 
         item["labels"] = torch.tensor(
             int(self.labels[index]),
@@ -142,16 +131,10 @@ def load_csv(
     test = pd.read_csv(test_path)
 
     for frame in (train, test):
-        missing = {
-            column
-            for column in (text_col, label_col)
-            if column not in frame.columns
-        }
+        missing = {column for column in (text_col, label_col) if column not in frame.columns}
 
         if missing:
-            raise ValueError(
-                f"Missing required columns: {sorted(missing)}"
-            )
+            raise ValueError(f"Missing required columns: {sorted(missing)}")
 
         frame.dropna(
             subset=[text_col, label_col],
@@ -162,6 +145,7 @@ def load_csv(
         frame["label"] = normalize_labels(frame[label_col])
 
     return train, test
+
 
 def sample_binary_prototypes(
     df: pd.DataFrame,
@@ -175,9 +159,7 @@ def sample_binary_prototypes(
         class_df = df[df["label"] == class_id]
 
         if class_df.empty:
-            raise ValueError(
-                f"Cannot sample prototypes: class {class_id} is empty."
-            )
+            raise ValueError(f"Cannot sample prototypes: class {class_id} is empty.")
 
         samples.append(
             class_df.sample(

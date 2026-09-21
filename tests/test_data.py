@@ -1,12 +1,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-import torch
 
 from hateprototypes.data import (
-    TextDataset,
-    load_csv,
-    make_loader,
     normalize_label,
     normalize_labels,
     sample_binary_prototypes,
@@ -121,14 +117,8 @@ def test_sample_binary_prototypes():
 def test_sample_binary_prototypes_is_reproducible():
     df = pd.DataFrame(
         {
-            "text": [
-                f"sample-{i}"
-                for i in range(20)
-            ],
-            "label": (
-                [0] * 10
-                + [1] * 10
-            ),
+            "text": [f"sample-{i}" for i in range(20)],
+            "label": ([0] * 10 + [1] * 10),
         }
     )
 
@@ -144,10 +134,7 @@ def test_sample_binary_prototypes_is_reproducible():
         seed=123,
     )
 
-    assert (
-        first["text"].tolist()
-        == second["text"].tolist()
-    )
+    assert first["text"].tolist() == second["text"].tolist()
 
 
 def test_sample_binary_prototypes_uses_available_examples():

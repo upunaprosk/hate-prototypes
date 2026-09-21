@@ -6,7 +6,7 @@ import torch
 
 
 def set_seed(seed: int) -> None:
-    """Set random seeds """
+    """Set random seeds"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -42,14 +42,11 @@ def build_class_means(
 
     if features.ndim != 2:
         raise ValueError(
-            f"Expected features with shape (n_samples, hidden_size), "
-            f"got {features.shape}."
+            f"Expected features with shape (n_samples, hidden_size), got {features.shape}."
         )
 
     if len(features) != len(labels):
-        raise ValueError(
-            "Number of feature vectors and labels must match."
-        )
+        raise ValueError("Number of feature vectors and labels must match.")
 
     prototypes: dict[int, np.ndarray] = {}
 
@@ -58,8 +55,7 @@ def build_class_means(
 
         if len(class_features) == 0:
             raise ValueError(
-                f"Cannot build prototype for class {class_id}: "
-                "no examples were provided."
+                f"Cannot build prototype for class {class_id}: no examples were provided."
             )
 
         class_features = l2_normalize(class_features, axis=1)
@@ -86,8 +82,7 @@ def cosine_classify(
 
     if features.ndim != 2:
         raise ValueError(
-            f"Expected features with shape (n_samples, hidden_size), "
-            f"got {features.shape}."
+            f"Expected features with shape (n_samples, hidden_size), got {features.shape}."
         )
 
     features = l2_normalize(features, axis=1)
