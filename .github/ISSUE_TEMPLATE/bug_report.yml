@@ -1,0 +1,108 @@
+name: Bug report
+description: Report a problem with HatePrototypes code or experiments
+title: "[Bug] "
+labels:
+  - bug
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem with HatePrototypes.
+
+        Please provide enough information for the issue to be reproduced.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected component
+      description: Which part of the repository is affected?
+      options:
+        - Installation / environment
+        - Core HatePrototypes code
+        - BERT prototype experiments
+        - OPT prototype experiments
+        - Guard-model experiments
+        - Model fine-tuning
+        - Prototype transfer analysis
+        - Early exiting / DeepBERT
+        - Tests
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem description
+      description: What happened?
+      placeholder: Describe the problem clearly.
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command used
+      description: Paste the exact command that produced the problem.
+      render: shell
+      placeholder: |
+        python hate_prototypes_bert.py ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error / traceback
+      description: Paste the complete relevant error message.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Please provide relevant environment information.
+      placeholder: |
+        OS: Windows 11
+        Python: 3.10.14
+        PyTorch: 2.8.0
+        Transformers: 4.57.0
+        CUDA: 12.6
+        GPU: NVIDIA ...
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: Commit hash, branch, or release version if known.
+      placeholder: master / v1.0.0 / abc1234
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: |
+        Add any other useful information, such as dataset,
+        model checkpoint, GPU memory, screenshots, or output files.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I have checked that this issue has not already been reported.
+          required: true
+        - label: I have included the command and relevant traceback.
+          required: true
